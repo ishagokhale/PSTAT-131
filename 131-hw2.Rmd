@@ -1,0 +1,101 @@
+---
+title: "131-hw2"
+author: "Isha Gokhale"
+date: "2022-10-13"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+(1)\newline
+
+```{r}
+library(ggplot2)
+library(tidyverse)
+library(tidymodels)
+library(corrplot)
+library(ggthemes)
+tidymodels_prefer()
+```
+```{r}
+df = read.csv('~/Downloads/hw2/data/abalone.csv')
+df$age <- df$rings+1.5
+ggplot(df, aes(x=age)) + geom_histogram()
+```
+We can see that the distribution of the age variable is right skewed, meaning majority of the observations lie towards the left. The mean age seems to be around 10. 
+\newline
+
+(2)\newline
+```{r}
+set.seed(3435)
+df_split <- initial_split(df, prop = 0.80,strata = age)
+df_train <- training(df_split)
+df_test <- testing(df_split)
+```
+(3)\newline
+```{r}
+df_recipe <- recipe(age ~ type+longest_shell + diameter+ height + whole_weight + shucked_weight+ viscera_weight + shell_weight, data = df_train) %>% 
+step_dummy(all_nominal_predictors()) %>%
+step_interact(terms = ~longest_shell:diameter) %>%
+step_interact(terms = ~starts_with('type'):shucked_weight) %>%
+step_interact(terms = ~shucked_weight:shell_weight) %>%
+step_zv(all_predictors()) %>%
+step_normalize(all_numeric(), -all_outcomes()) %>%
+prep(verbose = TRUE, log_changes = TRUE)
+```
+
+
+We can leave out the rings variable because the age variable is directly derived from the ring variable as age = rings + 1.5, which is linearly dependent. Therefore, all the other predictors would not be useful as rings would give us a perfect outcome each time. \newline
+
+(4)\newline
+```{r}
+lm_model <- linear_reg() %>% 
+  set_engine("lm")
+```
+(5) 
+```{r}
+lm_wflow <- workflow() %>% 
+  add_model(lm_model) %>% 
+  add_recipe(df_recipe)
+```
+
+```{r}
+lm_fit <- fit(lm_wflow, df_train)
+
+lm_fit %>% 
+  # This returns the parsnip object:
+  extract_fit_parsnip() %>% 
+  # Now tidy the linear model object:
+  tidy()
+```
+(6)\newline
+
+```{r}
+new_data <- data.frame(longest_shell = 0.50, diameter = 0.10, height = 0.30, whole_weight = 4, shucked_weight = 1, viscera_weight = 2, shell_weight = 1, type = 'F')
+
+```
+```{r}
+lm_fit
+pred <- predict(lm_fit, new_data = new_data)
+pred
+```
+The hypothetical age of this abalone would be around 23.7 years. \newline
+(7)\newline
+```{r}
+df_train_res <- predict(lm_fit, new_data = df_train %>% select(-age))
+df_train_res %>% 
+  head()
+df_train_res <- bind_cols(df_train_res, df_train %>% select(age))
+df_train_res %>% 
+  head()
+rmse(df_train_res, truth = age, estimate = .pred)
+df_metrics <- metric_set(rmse, rsq, mae)
+df_metrics(df_train_res, truth = age, 
+                estimate = .pred)
+```
+
+We can see that the r squared is .5513. This means that our predictors have a moderate effect on the age. The predictors explain around 55% of the variability seen in age can be explained by our predictors in our model. From the predictions we can see that they were pretty close to the actual age, however, two of the predictions were over a year off when the age was actually 8.5. Overall, the predictions were pretty accurate. The RMSE is 2.16.
+
+
+
