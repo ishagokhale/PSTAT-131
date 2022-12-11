@@ -1,0 +1,640 @@
+---
+title: "Predicting An Individual's Yearly Insurance Bill"
+author: "Isha Gokhale"
+date: "Fall 2022"
+output:
+  html_document:
+    toc: true
+    toc_depth: 2
+    code_folding: hide
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE,
+                      fig.height = 5,
+                      fig.width = 7,
+                      tidy = TRUE,
+                      tidy.opts = list(width.cutoff = 60))
+
+indent1 = '    '        
+indent2 = '        '
+indent3 = '            '
+
+```
+## Introduction: \newline
+The aim of this dataset is to predict a given individual's yearly medical insurance bill in America. I got my dataset from Kaggle. The data contains 6 predictors: age, sex, bmi, number of children, smoker status, and region. I will be fitting multiple models to this regression problem in order to determine an individuals yearly medical insurance cost as well as what factors most greatly affect a person's medical insurance cost. \newline
+
+# Background/Why is this model relevant?: \newline
+Medical insurance is a greatly disputed topic in America as we charge much more for health care than other countries. Additionally, healthcare and hospital costs are increasing, making this a prominent issue as people are in more urgent need to know their medical insuranace costs, to see if they can afford it or if they qualify for aid from the government, for example. The cost of certain healthcare products (such as drugs) depend on external factors, such as market forces. This creates some uncertainty and variability in a person's medical bill because some people might be more susceptible to requiring these drugs, but the cost of the drugs is changing based on the market. 
+\newline I am hoping that I can fit a model that best identifies how much a person will have to pay yearly in medical insurance. I believe this is relevant knowledge as healthcare is especially costly in America, and poeple should be aware of how much they will have to pay in case they need to apply for aid from the government to pay their medical bills.
+\newline
+
+# Loading Data and Packages \newline
+I obtained the dataset from Kaggle. The data contains 7 columns (6 predictor variables and 1 outcome variable) and 1338 rows. The following provides a description of the 7 variables: 
+
+1.`charges`:  The outcome variable describing the amount an individual has to pay in medical insurance in dollars yearly. 
+2.`age`: The age of the primary beneficiary. 
+3.`sex`: The gender of the insurance contractor, either male or female. 
+4.`bmi`: Body mass index of primary beneficiary
+5.`children`: Number of children covered by the health insurance (also known as number of dependents)
+6.`smoker`: Whether the person smokes or not: yes or no
+7.`region`: Beneficiary's location of residence in the US: northeast, southeast, southwest, or northwest
+
+# Data Cleaning and Splitting
+
+```{r, message=FALSE}
+library(formatR)
+library(tidyverse)
+library(tidymodels)
+library(ISLR)
+library(rpart.plot)
+library(vip)
+library(janitor)
+library(randomForest)
+library(xgboost)
+library(corrplot)
+library(recipes)
+```
+
+```{r}
+bill = read_csv('~/Downloads/insurance.csv', show_col_types = FALSE)
+bill
+```
+```{r, echo = TRUE}
+any(is.na(bill))
+```
+The original data does not contain any missing/NA values.
+```{r}
+bill$sex = as.factor(bill$sex)
+bill$smoker = as.factor(bill$smoker)
+bill$region = as.factor(bill$region)
+bill_split <- initial_split(bill, prop = 0.80,strata = charges)
+bill_train <- training(bill_split)
+bill_test <- testing(bill_split)
+(bill_train)
+(bill_test)
+```
+I converted all character variables to type factor so that they will be easier to use when modeling and creating visualizations. I split the data into a training and testing set, and stratified on the outcome variable, charges, so that we have a well proportioned range of charges per set. The training dataset contains 1,070 observations, while the testing dataset contains 268 observations.
+Since we only have 6 predictor variables that all seem particularly useful, we do not have to worry about eliminating any non important variables from the dataset. Instead, let's start exploratory data analysis on the training set. 
+
+## EDA
+Let's start of by creating a correlation matrix of the numeric variables in order to see which one's seem to be more closely related with our outcome variable, `charges` and examine their relationship further.
+
+# Correlation Matrix
+```{r}
+bill_numeric = bill_train[,c(1,3,4,7)]
+M<-cor(bill_numeric)
+corrplot(M, method = 'square')
+```
+
+Here we can see that age and BMI have a noticeable positive correlation with charges. I am surprised that the number of children a beneficiary has does not seem to affect insurance cost that greatly. This is surprising because I assumed that each kid would mean another insurance bill, but perhaps there are plans for families, so that they do not have to pay unreasonably expensive amounts of money.
+
+# Age
+Now let's look at the distribution of age, which I believe will be an important predictor variable.
+```{r}
+bill_train %>% 
+  ggplot(aes(age)) +
+  geom_bar()
+```
+The bar plot indicates that we have a lot of 17-19 year olds in our training set, but the count of the rest of the ages are relatively the same. This is important to note because we do not want an imbalanced class, meaning we do not want only a large amount of 20 year olds (for example) in our training set as our model will only learn to predict the insurance of bill of 20 year olds and won't be able to as accurately predict costs for other ages. Let's look at how age compares with insurance costs, as the correlation matrix indicated that age is the predictor with the highest correlation to charge.
+```{r}
+bill_train %>% 
+  ggplot(aes(age, charges)) +
+  geom_point()
+```
+
+Based off this simple line plot we can see that as age increases, insurance charges also increase in an positive linear trend. However, there seem to be three different trends, with around 5 outliers that indicate high insurance charges. It makes sense that as age increases, so does insurance cost as people are more prone to illnesses as they grow old, resulting in higher insurance bills. It is interesting to note the three different trends we see: for example, a 20 year old's insurance cost can fall in either three categories of around \$1000, around \$2000, or around \$4000. \newline
+
+# BMI
+The correlation matrix also indicated that the BMI of an individual also plays a big factor in their insurance bill as it indicates how healthy their body weight is, in turn indicating how prone they are to health risks.
+```{r}
+ggplot(bill_train, aes(bmi)) +
+  geom_boxplot()
+```
+We can see that the median BMI of the individuals from out training set is slightly over 30. A BMI of 30 is considered as overweight according to the National Health and Nutrition Survey [cite this]. This makes sense for out dataset as it is obtained in America, a country known for having high obesity rates. We have a few outliers towards the 45 - 50 BMI range, most likely indicating a high medical insurance bill. This also aligns with the outliers we saw in our scatter plot, as certain individuals had significantly high insurance bills in comparison to the rest of their age group. \newline
+
+Let's see how insurance charges directly compare with BMI values.
+```{r}
+bill_train %>% 
+  ggplot(aes(bmi, charges)) +
+  geom_point() 
+```
+There seems to be no clear trend between BMI and insurance charges. Let's see if a trend emerges if we split this scatter plot based on the `sex` variable.
+```{r}
+ggplot(bill_train, aes(bmi, charges)) +
+  geom_point(color = 'orange') + 
+  facet_wrap(~sex)
+```
+The trend remains relatively the same with males having a greater number of higher insurance charges. This leads me to conclude that BMI does not have a significant effect on yearly insurance costs. Just to double check, let's see if there is a trend in insurance costs and BMI when split by region.
+
+```{r}
+ggplot(bill_train, aes(bmi, charges)) +
+  geom_point(color = 'darkgreen') + 
+  facet_wrap(~region)
+```
+There seems to be no apparent trend here. One particular observation is that the arrangement of points between the southern regions is similar to each and the points between the northern regions are more similar to each other. For example, the northeast and northwest regions both seem to have a similar amount of points in the 30 - 40 BMI range. This makes sense as insurance charges are more likely to be similar in regions closer to each other. 
+
+# Region 
+I believe that an individuals location of residence (`region`) also plays a big factor in insurance costs as some places have higher cost of healthcare, resulting in a higher bill. Let's look at the distribution of the regions we have.
+```{r}
+bill_train %>% 
+  ggplot(aes(region)) +
+  geom_bar()
+```
+We have around the same amount of observations per region. Now lets see how insurance charges differ per region.
+```{r}
+ggplot(bill_train, aes(age, charges)) +
+  geom_point(color = 'steelblue') + 
+  facet_wrap(~ region)
+```
+The scatterplot form is displaying a similar pattern per region. To gain more insights into general insurance cost trends across region, let's create a new column reassigning the charges to new values based off a range that reassigns charges to one of 6 values. These ranges are going to be determined by percentiles using the mean and standard deviation.
+```{r}
+bill_train$charges_new = bill_train$charges #create copy of charges column
+bill2 = bill_train[c(8)]
+percentiles = apply(bill2[],2,quantile,probs=c(0.10,0.20,0.30,0.40,0.50,0.60,0.70,0.80,0.90))
+percentiles
+percentiles[1]
+```
+```{r}
+bill_train$charges_new[bill_train$charges_new <= percentiles[1]] = 1 
+bill_train$charges_new[bill_train$charges_new > percentiles[1] & bill_train$charges_new <= percentiles[2]] = 2
+bill_train$charges_new[bill_train$charges_new > percentiles[2] & bill_train$charges_new <= percentiles[3]] = 3
+bill_train$charges_new[bill_train$charges_new > percentiles[3] & bill_train$charges_new <= percentiles[4]] = 4
+bill_train$charges_new[bill_train$charges_new > percentiles[4] & bill_train$charges_new <= percentiles[5]] = 5
+bill_train$charges_new[bill_train$charges_new > percentiles[5] & bill_train$charges_new <= percentiles[6]] = 6
+bill_train$charges_new[bill_train$charges_new > percentiles[6] & bill_train$charges_new <= percentiles[7]] = 7
+bill_train$charges_new[bill_train$charges_new > percentiles[7] & bill_train$charges_new <= percentiles[8]] = 8
+bill_train$charges_new[bill_train$charges_new > percentiles[8] & bill_train$charges_new <= percentiles[9]] = 9
+bill_train$charges_new[bill_train$charges_new > percentiles[9]] = 10
+
+```
+
+```{r}
+ggplot(bill_train, aes(charges_new)) +
+  geom_histogram(bins = 10, binwidth = .35) + 
+  facet_wrap(~ region)
+```
+The above visualization is a histogram depicting counts of how many charges fall within a certain percentile range. For example, in the northeast, about 29 insurance charges fall in the 80th percentile but above the 70th percentile, meaning 29 individuals there pay an insurance cost greater than 80% of the population, indicating a high insurance cost. The 10 indicates the number of charges that fall greater than the 90th percentile; these are the highest insurance charges.This allows us to see that the southwest region has relatively lower insurance charges as there are not many insurance charges that fall in the 90th - greater than 90th percentile region. The southeast region, on the other hand, has a significantly higher number of charges that fall above the 90th percentile. However, the southeast also has the highest number of charges falling below the 10th percentile. Looking at the distribution chart created in the beginning, we see that this is due to the fact that the southeast simply has more observations, so it makes sense that it has more counts in certain percentiles. Overall, the counts are pretty even across region and percentiles. This indicates that region is most likely not an extremely important predictor in determining health insurance costs. \newline
+
+Just to double check, let's look at the standard deviation and average insurance charges across all regions.
+```{r}
+NE = filter(bill_train, region == 'northeast')
+NE_mean = mean(NE$charges)
+NE_sd = sd(NE$charges)
+
+SE = filter(bill_train, region == 'southeast')
+SE_mean = mean(SE$charges)
+SE_sd = sd(SE$charges)
+
+NW = filter(bill_train, region == 'northwest')
+NW_mean = mean(NW$charges)
+NW_sd = sd(NW$charges)
+
+SW = filter(bill_train, region == 'southwest')
+SW_mean = mean(SW$charges)
+SW_sd = sd(SW$charges)
+
+data= matrix(c('northeast', NE_mean, NE_sd, 'southeast', SE_mean, SE_sd, 'northwest', NW_mean, NW_sd, 'southwest', SW_mean, SW_sd), ncol=3, byrow=TRUE)
+ 
+# specify the column names and row names of matrix
+colnames(data) = c('region','average insurance cost', 'standard deviation')
+ 
+# assign to table
+final=as.table(data)
+ 
+# display
+final
+```
+Here we can see that the southeast has a significantly higher insurance cost. This is further supported by the histogram we made above indicating that majority of the individuals living in the southeast pay insurance charges greater than the 90th percentile (indicated by the 10 on the x axis), meaning they pay insurance costs greater than 90% of the population. The standard deviation, however, is also fairly large for the southeast region. This is also supported by the above histogram as the second highest bar was the below the 10th percentile bar. Therefore, it makes sense that the standard deviation is so high as the charges for that region are fairly spread out. The standard deviation and mean for the rest fo the regions are relatively the same. This leads to the conclusion that there seems to be no significant effect of region on insurance costs. 
+
+# Smoker
+
+Now let's take a look at how the smoker status of an individual affects his/her medical insurance cost. First, let's start off by checking whether we have an imbalanced class or not by looking at the distribution of the `smoker` variable.
+```{r}
+bill_train %>% 
+  ggplot(aes(smoker)) +
+  geom_bar()
+```
+We have a significantly higher number of non smokers in our testing dataset. Since smoker is a predictor variable, and not our target variable, it is not detrimental to our analysis/model if it is imbalanced. Let's see how much percentiles of charges vary based on smoker status. Similar to the last plot we looked at, but this time we are looking at smoker status as opposed to region.
+
+
+```{r}
+bill_train %>% 
+  ggplot(aes(charges_new)) +
+  geom_bar(aes(fill = smoker))
+```
+Recall, the higher the percentile, the more expensive the medical insurance bill is. Here we can see that majority of the smoking population has an insurance bill that falls above the 90th percentile (indicated by 10 on the x axis). Among the non smoking population, however, we can see that majority of them fall in 60th percentile in insurance bills. Therefore, it is reasonable to assume that a person's smoker status affects how much they have to pay yearly in medical insurance.
+
+# Sex
+```{r}
+bill_train %>% 
+  ggplot(aes(sex)) +
+  geom_bar()
+```
+```{r}
+ggplot(bill_train, aes(charges, sex)) +
+  geom_boxplot()
+```
+When looking at the distribution of charges between male and female, they seem to both have the same median of a little below \$10,000. However, the male population has a significantly higher 75th percentile value. This means that 75% of insurance costs for males fall below \$19,000 a year, while 75% of female insurance costs fall below $15,000 a year. This means that males seem to have to pay higher insurance rates a year. Let's see whether these values differ by region.
+```{r}
+bill_train %>% 
+  ggplot(aes(x = charges, y = reorder(region, charges), fill = sex)) + 
+  geom_boxplot() +
+  labs(y = "Region", x = "Charges") +
+  theme_bw()
+```
+The above diagram shows the distribution of charges per region, separated by sex. We can see that the southeast has significantly higher charges for males than any other region. However, females in the northeast have a higher median insurance cost than any other females in other regions. Another interesting thing to note is that males have a higher average insurance charge for every region except for the northwest where they fall slightly below the females. While these are interesting observations to note, they do not signify a clear trend or pattern between sex and charge or region and charge or the intersection between the three of them. Let's take a look at the averages of insurance charges between males and females overall and see if they differ drastically. 
+
+```{r}
+male = filter(bill_train, sex == 'male')
+male_mean = mean(male$charges)
+male_sd = sd(male$charges)
+
+female = filter(bill_train, sex == 'female')
+female_mean = mean(female$charges)
+female_sd = sd(female$charges)
+
+data= matrix(c('male', male_mean, male_sd, 'female', female_mean, female_sd), ncol=3, byrow=TRUE)
+ 
+# specify the column names and row names of matrix
+colnames(data) = c('sex','average insurance cost', 'standard deviation')
+ 
+# assign to table
+final=as.table(data)
+ 
+# display
+final
+
+```
+As expected, males have a higher average insurance cost by a little over $1000. They also have a slightly higher standard deviation. Overall, I believe sex plays a role in determining how much an individual has to pay in health insurance, but it does not have as significant of an effect that age does. I am curious to see what a histogram of age vs charges separated by sex looks like.
+
+```{r}
+ggplot(bill_train, aes(age, charges)) +
+  geom_point()+
+  facet_wrap(~sex)
+```
+The overall trends remain the same for each gender, yet males seem to have more points in the \$30,000 to \$40,000 range. This is expected as males have a higher average insurance rate. Also, we can see that both genders have similar number of outliers (three for females, and two for males).
+```{r}
+bill_train %>% 
+  ggplot(aes(x = charges, y = reorder(region, charges), fill = smoker)) + 
+  geom_boxplot() +
+  labs(y = "Region", x = "Charges") +
+  theme_bw()
+```
+Here we can see the clear difference in charges between people who do smoke vs people that do not smoke that is apparent in every region. One unique thing to note is that the median charge for smokers in the northwest is considerably lower than the median insurance charge for all smokers in different regions. 
+
+# Children
+As the last component of our EDA, let's take a look at how the number of children a beneficiary covers affects his/her insurance bill. The correlation matrix indicated that `charges` and `children` did not have a high correlation. This was surprising to me as I thought with an increased number of children a beneficiary has to cover, the price of the insurance bill also increases in order to account for each additional person.
+```{r}
+ggplot(bill_train, aes(children)) + 
+  geom_bar(fill = 'purple')
+```
+Here we can see that majority of the individuals in our training set are not covering other individuals. Let's look at mean and standard deviation to see just how much the averages differ per number of children. 
+```{r}
+zero = filter(bill_train, children == 0)
+zero_mean = mean(zero$charges)
+zero_sd = sd(zero$charges)
+
+one = filter(bill_train, children == 1)
+one_mean = mean(one$charges)
+one_sd = sd(one$charges)
+
+two = filter(bill_train, children == 2)
+two_mean = mean(two$charges)
+two_sd = sd(two$charges)
+
+three = filter(bill_train, children == 3)
+three_mean = mean(three$charges)
+three_sd = sd(three$charges)
+
+four = filter(bill_train, children == 4)
+four_mean = mean(four$charges)
+four_sd = sd(four$charges)
+
+five = filter(bill_train, children == 5)
+five_mean = mean(five$charges)
+five_sd = sd(five$charges)
+
+data= matrix(c('zero', zero_mean, zero_sd, 'one', one_mean, one_sd,  'two', two_mean, two_sd, 'three', three_mean, three_sd, 'four', four_mean, four_sd, 'five', five_mean, five_sd), ncol=3, byrow=TRUE)
+
+# specify the column names and row names of matrix
+colnames(data) = c('number of children','average insurance cost', 'standard deviation')
+ 
+# assign to table
+final=as.table(data)
+ 
+# display
+final
+```
+These values were not what I expected them to be. I expected individuals with more children to have higher yearly insurance costs as they have more people to cover. It turns out, however, that people with 3 children have to pay the highest in average insurance cost yearly, while people with 5 children pay the most. There does not seem to be a clear trend to indicate that with an increase in the number of children comes an increase in average insurance cost. This matches the assumption made in the correlation matrix in the beginning as we can see that charges and children has a very low correlation. Let's see if there is any trend between charges, children and smoker status. 
+```{r}
+bill_train %>% 
+  ggplot(aes(x = charges, y = reorder(children, charges), fill = smoker)) + 
+  geom_boxplot() +
+  labs(y = "Children", x = "Charges") +
+  theme_bw()
+```
+We can see that individuals that smoke have noticeably higher medical insurance charges regardless of the number of children. The ordering of the y axis (from top to bottom) indicates the greatest to least average charges per number of children. Once again, we can see that there is no trend indicating that the more children you have the more one pays in medical insurance. Based off this graph and the correlation matrix created at the beginning of the EDA, we can conclude that the number of children one covers does not seem to directly affect insurance costs.
+
+## Model Building
+Luckily, the original dataset was already clean, so we do not need to worry about cleaning it. I already split the training and testing data prior to EDA, so all we need to do now is create a recipe to fit our data to models. 
+
+# Recipe Building
+
+In order to build a recipe for our model I am going to include all 6 original predictors the dataset came with. We are going to use `step_normalize()` to center and scale all our predictors. I will also be using `step_dummy()` to convert the independent categorical variables to dummy variables.
+```{r}
+bill_recipe <- recipe(charges ~ age + sex + bmi + region + children + smoker, data = bill_train) %>%
+  step_dummy(sex) %>%
+  step_dummy(region) %>%
+  step_dummy(smoker) %>%
+  step_normalize(all_predictors()) 
+```
+
+
+# K Fold Cross Validation
+
+Now we are going to use cross validation because it reduces computation time, reduces bias, and the variance of the estimate decreases as k increases. We will be stratifying on the outcome variable, `charges`, so that we do not have imbalanced classes per fold.
+```{r}
+set.seed(1234)
+bill_fold = vfold_cv(bill_train, v = 10, strata = charges) #10 folds
+```
+
+## Model Fitting
+In order to fit our recipe to models, we are going to build a workflow, specify the engine, and set mode to regression. Due to the relatively small number of predictors I have, I figured I would start off with more simple models such as linear regression and logistic regression and eventually work my way up to random forest and regression tree. I chose to fit logistic regression over ridge regression as ridge regression is best used when there is collinearity between predictors. The results from the correlation matrix at the beginning of the EDA indicate low correlation between predictors, so I ruled out ridge regression. I have also decided to use lasso regression as I believe some predictors, such as region, will not be particularly useful, and lasso regression is best used for feature selection as well. We will be assessing model performance primarily through `rmse` (root mean square deviation) and `rsq` (R squared) metrics as these are most commonly used to assess regression models. \newline
+
+First let's start off with linear regression. 
+
+#Linear Regression
+```{r}
+lm_spec <- linear_reg() %>%
+  set_mode("regression") %>%
+  set_engine("lm")
+
+lm_wf <- workflow() %>%
+  add_model(lm_spec) %>%
+  add_recipe(bill_recipe)
+set.seed(1234)
+lm_fit <- fit(lm_wf, bill_train)
+
+lm_fit %>% 
+  # This returns the parsnip object:
+  extract_fit_parsnip() %>% 
+  # Now tidy the linear model object:
+  tidy()
+```
+
+```{r}
+
+bill_train_res <- predict(lm_fit, new_data = bill_train %>% select(-charges))
+bill_train_res %>% 
+  head()
+
+bill_train_res <- bind_cols(bill_train_res, bill_train %>% select(charges))
+bill_train_res %>% 
+  head()
+
+bill_train_res %>% 
+  ggplot(aes(x = .pred, y = charges)) +
+  geom_point(alpha = 0.2) +
+  geom_abline(lty = 2) + 
+  theme_bw() +
+  coord_obs_pred()
+
+bill_metrics <- metric_set(rmse, rsq)
+bill_metrics(bill_train_res, truth = charges, 
+                estimate = .pred)
+```
+Due to the fact that many of the points do not fall on the dotted line, we can conclude that our linear regression model did not fit well. Let's see if lasso regression performs better as it drops any predictors deemed unimportant. We also have an extremely high rmse value of 6013. An rmse score between 0.2 and 0.5 is ideal as it indicates that the model can accurately predict data. 
+
+# Lasso Linear Regression
+```{r}
+lasso_spec <- 
+  linear_reg(penalty = tune(), mixture = 1) %>% #mixture = 1 indicates lasso
+  set_mode("regression") %>% 
+  set_engine("glmnet") 
+
+lasso_workflow <- workflow() %>% 
+  add_recipe(bill_recipe) %>% 
+  add_model(lasso_spec)
+set.seed(1234)
+
+penalty_grid <- grid_regular(penalty(range = c(-3, 3)), levels = 50)
+
+tune_res <- tune_grid(
+  lasso_workflow,
+  resamples = bill_fold, 
+  grid = penalty_grid
+)
+
+autoplot(tune_res)
+```
+
+```{r}
+show_best(tune_res, metric = "rmse") %>% select(-.estimator, -.config)
+```
+
+The above visualization indicates that as the amount of regularization approaches 15, the rmse reaches a peak and then sharply decreases. Meanwhile, the rsq hits a low and starts rapidly increasing. We want a model with low rmse and high rsq as that indicates good model fit. The best rmse we see is at 6035.118. While rmse value is lower than our previous linear regression model, it is still extremely high, indicating poor model fit. 
+
+
+# Regression Tree
+```{r}
+tree_spec <- decision_tree() %>%
+  set_engine("rpart")
+reg_tree_spec = tree_spec %>%
+  set_mode('regression')
+set.seed(1234)
+
+reg_tree_fit <- fit(reg_tree_spec, 
+                    charges ~ age + sex + bmi + region + children + smoker, data = bill_train)  #fit model to training set
+
+augment(reg_tree_fit, new_data = bill_test) %>%
+  rmse(truth = charges, estimate = .pred)  
+
+reg_tree_fit %>%
+  extract_fit_engine() %>%
+  rpart.plot()  #plot decision tree
+```
+The regression tree model produces an rmse of 5026.74. This is lower than the lasso linear regression model we looked at before, indicating that this model produces a better fit, yet it is still a poor fit to our data. To see if we can find a better decision tree, we are going to tune the cost_complexity parameter. 
+```{r}
+reg_tree_wf <- workflow() %>%
+  add_model(reg_tree_spec %>% set_args(cost_complexity = tune())) %>%
+  add_recipe(bill_recipe)
+
+set.seed(3435)
+
+param_grid <- grid_regular(cost_complexity(range = c(-5, -1)), levels = 10)
+
+tune_res <- tune_grid(
+  reg_tree_wf, 
+  resamples = bill_fold, 
+  grid = param_grid
+)
+```
+```{r}
+autoplot(tune_res)
+```
+We can see that rmse increases as the cost complexity parameter increases the rmse also increases and the rsq decreases. This is exactly the opposite of what we want, so we can conclude that lower values the cost complexity parameter produce a better fit model. Now we select the model with the best rmse and fit the model on the whole training set.
+```{r}
+best_complexity <- select_best(tune_res, metric = "rmse")
+best_complexity
+show_best(tune_res, metric = "rmse") %>% select(-.estimator, -.config)
+```
+
+The rmse of our best performing regression tree was 4710. This is lower than the other two models we have considered before, so let's keep it in mind as we fit the bagging model.
+
+# Bagging
+```{r}
+bagging_spec <- rand_forest(mtry = .cols()) %>%
+  set_engine("randomForest", importance = TRUE) %>%
+  set_mode("regression")
+set.seed(1234)
+bagging_fit <- fit(bagging_spec, charges ~ age + sex + bmi + region + children + smoker, data = bill_train)
+augment(bagging_fit, new_data = bill_test) %>%
+  rmse(truth = charges, estimate = .pred)
+augment(bagging_fit, new_data = bill_test) %>%
+  ggplot(aes(charges, .pred)) +
+  geom_abline() +
+  geom_point(alpha = 0.5)
+```
+The bagging model (which is a random forest model but all the predictors are used) produces an rmse of 4852.515 on the testing set. The scatter plot also shows a pretty good model fit as majority of the points land on the line.
+
+# Random Forest
+
+```{r, eval = FALSE}
+rf_spec <- rand_forest(mtry = tune(), min_n = tune()) %>%
+  set_engine("randomForest", importance = TRUE) %>%
+  set_mode("regression")
+
+tree_wf <- workflow() %>%
+  add_model(rf_spec) %>%
+  add_recipe(bill_recipe)
+
+set.seed(1234)
+
+param_grid <- grid_regular(mtry(range = c(1, 6)), min_n(range= c(50,100)), levels = 10)
+
+tune_res2 <- tune_grid(
+  tree_wf, 
+  resamples = bill_fold, 
+  grid = param_grid
+)
+save(tune_res2, tree_wf, file = 'rf.rda')
+```
+```{r}
+load('rf.rda')
+autoplot(tune_res2, metric = "rmse")
+```
+Here we can see that as the number of predictors increases, the rmse decreases, which is a positive result. Additionally, the smaller the node size the better the results for the rmse. Let's see what model parameters produced the best rmse value.
+```{r}
+show_best(tune_res2, metric = "rmse") %>% select(-.estimator, -.config)
+```
+Here we can see that the model with the lowest average rmse of 4567.638 has 6 all predictors (mtry = 6) and min_n = 50. This is a high rmse, but it is among the lowest of the models that we have tested so far. Let's see if a KNN model fits better.
+
+# KNN
+
+```{r, eval = FALSE}
+knn_model <- 
+  nearest_neighbor(
+    neighbors = tune(),
+    mode = "regression") %>% 
+  set_engine("kknn")
+
+knn_workflow <- workflow() %>% 
+  add_model(knn_model) %>% 
+  add_recipe(bill_recipe)
+
+set.seed(1234)
+knn_grid = grid_regular(neighbors(range = c(1,5)),
+                        levels = 10)
+
+knn_tune = knn_workflow %>% 
+  tune_grid(
+    resamples = bill_fold,
+    grid = knn_grid
+  )
+save(knn_tune, knn_workflow, file = 'knn.rda')
+```
+
+```{r}
+load('knn.rda')
+```
+
+```{r}
+autoplot(knn_tune, metric = 'rmse')
+```
+Here we can see that as the number of nearest neighbors increases, the rmse decreases, which is what we want. The lowest rmse we get is 5500 when the number of nearest neighbors is 5. Let's see how well the boosted trees model works.
+# Boosted Trees
+```{r}
+boost_spec <- boost_tree(min_n= tune(),
+                         mtry = tune(),
+                         learn_rate = tune()) %>%
+  set_engine("xgboost") %>%
+  set_mode("regression")
+
+bt_workflow <- workflow() %>% 
+  add_model(boost_spec) %>% 
+  add_recipe(bill_recipe)
+```
+
+```{r}
+#specify parameters
+set.seed(1234)
+boosted_grid <- grid_regular(min_n(range = c(50, 100)),
+                            mtry(range = c(1,6)),
+                            learn_rate(range = c(-2,-1)),
+                            levels = 6)
+```
+
+```{r, eval = FALSE}
+bt_tune <- bt_workflow %>% 
+  tune_grid(
+    resamples = bill_fold, 
+    grid = boosted_grid
+    )
+
+#save results
+save(bt_tune, bt_workflow, file = "~/Downloads/131-final.rda")
+```
+
+```{r}
+load( "~/Downloads/131-final.rda")
+autoplot(bt_tune)
+```
+```{r}
+best_bt <- select_best(bt_tune, metric = "rmse")
+best_bt
+show_best(bt_tune, metric = "rmse") %>% select(-.estimator, -.config)
+```
+Based off the parameters we chose to specify, we can see that when we use all 6 predictors, the min_n is 50, and learning rate is .01, we get the model with the lowest rmse of 6078.161.
+
+## Fitting the Final Model
+Now that we have fit all our proposed models to the training data set and found the best rmse values per model, we can see that the random forest model produced the lowest rmse value of 4567 on the training set. Let's fit this model to our testing set and observe model performance.
+
+```{r}
+best_rmse <- select_best(tune_res2, metric = "rmse")
+
+final_wf <- finalize_workflow(tree_wf, best_rmse)
+
+final_fit <- fit(final_wf, data = bill_test)
+```
+
+```{r}
+augment(final_fit, new_data = bill_test) %>%
+  ggplot(aes(charges, .pred)) +
+  geom_abline() +
+  geom_point(alpha = 0.5)
+```
+The final scatter plot displaying the accuracy of the testing set is relatively good. The higher the charges get, however, the poorer our model predictions are. More of the points fall on the line when the charges are below $20,000. Let's see which predictors this random forest model deemed the most important.
+```{r}
+vip(extract_fit_engine(final_fit))
+```
+Smoker status (particularly if it was yes) had an overwhelmingly important effect on determining insurance charges. Age, BMI, and children also played an important part. It seems that the southwest region, if anything had a negative impact on variable performance. This aligns with the results of the correlation matric we produced at the beginning of the EDA.
+
+# Conclusion
+
+Overall, the final random forest model did a good job of predicting charges below $20,000 on the testing set. The model still produced a very high RMSE value of over 4000. However, all of the other models produced a value greater than this. This high RMSE indicates that our model is not able to account for the important features underlying our data. The regression tree, bagging, random forest and k nearest neighbors performed the best among all our models. The lasso regression, linear regression, and boosted trees performed poorly as they had the highest rmse values. I was not surprised that linear regression or lasso regression did not work well because the EDA revealed that there did not seem to be an obvious linear pattern between charges and any of the other predictors.
+
+My next steps in order to improve this model would be to attain more predictor variables that would help predict charge better. Since our model is failing to account for important underlying features, I am hoping that including a wider variety of predictor variables will increase the chance of producing a model better equipped with a wider range of predictors used to determine insurance costs. Another next step I would look into is creating some interaction terms between certain predictors. There seemed to be no correlation between predictors in my current predictor set, but hopefully with the addition of more predictors, I can find some varialbes that are correlated in order to create interaction terms between them.
+
+
+
